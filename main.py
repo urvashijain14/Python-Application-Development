@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import secrets
+import sqlite3
 from database import create_table, get_connection
 from schemas import StudentCreate
 app = FastAPI(
@@ -197,13 +198,18 @@ def create_student(student: StudentCreate):
             "student_id": cursor.lastrowid
         }
 
-    except Exception:
-        connection.rollback()
-        raise HTTPException(
-            status_code=400,
-            detail="Email already exists or invalid data"
-        )
-
+    except sqlite3.IntegrityError:
+      connection.rollback()
+      raise HTTPException(
+        status_code=409,
+        detail="A student with this email already exists"
+    )
+    except sqlite3.Error:
+      connection.rollback()
+      raise HTTPException(
+        status_code=500,
+        detail="A database error occurred"
+    )
     finally:
         connection.close()
       
