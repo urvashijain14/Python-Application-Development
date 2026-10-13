@@ -2,8 +2,16 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import secrets
 import sqlite3
+import logging
 from database import create_table, get_connection
 from schemas import StudentCreate
+logging.basicConfig(
+    filename="app.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Student Management API",
     description="A REST API to create, view, update, and delete student records with authentication and validation.",
@@ -60,7 +68,9 @@ students = [
     summary="Home",
     description="Check whether the Student Management API is running."
 )
+
 def home():
+    logger.info("Home endpoint accessed")
     return {"message": "Student Management API is running!"}
 
 @app.get(
@@ -69,18 +79,33 @@ def home():
     description="Retrieve all student records from the database. Authentication is required.",
     dependencies=[Depends(verify_credentials)]
 )
+
 def get_students():
-    connection = get_connection()
+    connection = None
 
-    rows = connection.execute(
-        "SELECT * FROM students"
-    ).fetchall()
+    try:
+        connection = get_connection()
+        rows = connection.execute(
+            "SELECT * FROM students"
+        ).fetchall()
 
-    connection.close()
+        logger.info("Retrieved all student records")
 
-    return {
-        "students": [dict(row) for row in rows]
-    }
+        return {
+            "students": [dict(row) for row in rows]
+        }
+
+    except sqlite3.Error:
+        logger.exception("Failed to retrieve student records")
+        raise HTTPException(
+            status_code=500,
+            detail="A database error occurred"
+        )
+
+    finally:
+        if connection is not None:
+            connection.close()
+
 
 @app.get(
     "/students/{student_id}",
@@ -89,29 +114,50 @@ def get_students():
     dependencies=[Depends(verify_credentials)]
 )
 
+
 def get_student(student_id: int):
-    connection = get_connection()
+    connection = None
 
-    row = connection.execute(
-        "SELECT * FROM students WHERE id = ?",
-        (student_id,)
-    ).fetchone()
+    try:
+        connection = get_connection()
+        row = connection.execute(
+            "SELECT * FROM students WHERE id = ?",
+            (student_id,)
+        ).fetchone()
 
-    connection.close()
+        if row is None:
+            logger.warning("Student not found: ID %s", student_id)
+            raise HTTPException(
+                status_code=404,
+                detail="Student not found"
+            )
 
-    if row is None:
+        logger.info("Retrieved student with ID %s", student_id)
+        return dict(row)
+
+    except HTTPException:
+        raise
+
+    except sqlite3.Error:
+        logger.exception(
+            "Failed to retrieve student with ID %s", student_id
+        )
         raise HTTPException(
-            status_code=404,
-            detail="Student not found"
+            status_code=500,
+            detail="A database error occurred"
         )
 
-    return dict(row)
+    finally:
+        if connection is not None:
+            connection.close()
+
 @app.put(
     "/students/{student_id}",
     summary="Update Student",
     description="Update an existing student's name, email, age, and course using their ID.",
     dependencies=[Depends(verify_credentials)]
 )
+
 
 def update_student(
     student_id: int,
@@ -120,59 +166,101 @@ def update_student(
     age: int,
     course: str
 ):
-    connection = get_connection()
+    connection = None
 
-    cursor = connection.execute(
-        """
-        UPDATE students
-        SET name = ?, email = ?, age = ?, course = ?
-        WHERE id = ?
-        """,
-        (name, email, age, course, student_id)
-    )
+    try:
+        connection = get_connection()
 
-    connection.commit()
-
-    if cursor.rowcount == 0:
-        connection.close()
-        raise HTTPException(
-            status_code=404,
-            detail="Student not found"
+        cursor = connection.execute(
+            """
+            UPDATE students
+            SET name = ?, email = ?, age = ?, course = ?
+            WHERE id = ?
+            """,
+            (name, email, age, course, student_id)
         )
 
-    connection.close()
+        if cursor.rowcount == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="Student not found"
+            )
 
-    return {
-        "message": "Student updated successfully"
-    }
+        connection.commit()
+        logger.info("Updated student with ID %s", student_id)
+
+        return {"message": "Student updated successfully"}
+
+    except HTTPException:
+        raise
+
+    except sqlite3.IntegrityError:
+        if connection is not None:
+            connection.rollback()
+        logger.warning("Duplicate email while updating student ID %s", student_id)
+        raise HTTPException(
+            status_code=409,
+            detail="A student with this email already exists"
+        )
+
+    except sqlite3.Error:
+        if connection is not None:
+            connection.rollback()
+        logger.exception("Failed to update student ID %s", student_id)
+        raise HTTPException(
+            status_code=500,
+            detail="A database error occurred"
+        )
+
+    finally:
+        if connection is not None:
+            connection.close()
 @app.delete(
     "/students/{student_id}",
     summary="Delete Student",
     description="Delete an existing student using their ID. Returns 404 if the student does not exist.",
     dependencies=[Depends(verify_credentials)]
 )
+
 def delete_student(student_id: int):
-    connection = get_connection()
+    connection = None
 
-    cursor = connection.execute(
-        "DELETE FROM students WHERE id = ?",
-        (student_id,)
-    )
+    try:
+        connection = get_connection()
 
-    connection.commit()
-
-    if cursor.rowcount == 0:
-        connection.close()
-        raise HTTPException(
-            status_code=404,
-            detail="Student not found"
+        cursor = connection.execute(
+            "DELETE FROM students WHERE id = ?",
+            (student_id,)
         )
 
-    connection.close()
+        if cursor.rowcount == 0:
+            raise HTTPException(
+                status_code=404,
+                detail="Student not found"
+            )
 
-    return {
-        "message": "Student deleted successfully"
-    }
+        connection.commit()
+        logger.info("Deleted student with ID %s", student_id)
+
+        return {"message": "Student deleted successfully"}
+
+    except HTTPException:
+        raise
+
+    except sqlite3.Error:
+        if connection is not None:
+            connection.rollback()
+
+        logger.exception("Failed to delete student ID %s", student_id)
+
+        raise HTTPException(
+            status_code=500,
+            detail="A database error occurred"
+        )
+
+    finally:
+        if connection is not None:
+            connection.close()
 @app.post(
     "/students",
     summary="Create Student",

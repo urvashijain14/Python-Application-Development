@@ -1,7 +1,8 @@
+
 import sqlite3
+from pathlib import Path
 
-
-DATABASE_NAME = "students.db"
+DATABASE_NAME = Path(__file__).resolve().parent / "students.db"
 
 
 def get_connection():
@@ -13,15 +14,16 @@ def get_connection():
 def create_table():
     connection = get_connection()
 
-    connection.execute("""
-        CREATE TABLE IF NOT EXISTS students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT NOT NULL UNIQUE,
-            age INTEGER NOT NULL,
-            course TEXT NOT NULL
-        )
-    """)
-
-    connection.commit()
-    connection.close()
+    try:
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS students (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL UNIQUE,
+                age INTEGER NOT NULL,
+                course TEXT NOT NULL
+            )
+        """)
+        connection.commit()
+    finally:
+        connection.close()
